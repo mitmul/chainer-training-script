@@ -18,12 +18,7 @@ import chainer
 from chainer import training
 from chainer.training import extensions
 
-import alex
-import googlenet
 import resnet50
-import googlenetbn
-import nin
-import vgg16
 
 
 class PreprocessedDataset(chainer.dataset.DatasetMixin):
@@ -69,14 +64,7 @@ class PreprocessedDataset(chainer.dataset.DatasetMixin):
 
 def main():
     archs = {
-        'alex': alex.Alex,
-        'alex_fp16': alex.AlexFp16,
-        'googlenet': googlenet.GoogLeNet,
-        'googlenetbn': googlenetbn.GoogLeNetBN,
-        'googlenetbn_fp16': googlenetbn.GoogLeNetBNFp16,
-        'nin': nin.NIN,
         'resnet50': resnet50.ResNet50,
-        'vgg16': vgg16.VGG16
     }
 
     parser = argparse.ArgumentParser(
