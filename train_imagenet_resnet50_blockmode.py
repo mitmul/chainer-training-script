@@ -9,23 +9,30 @@ ImageDataLayer).
 
 """
 from __future__ import print_function
+
 import argparse
+import os
 import random
 
-import numpy as np
-
 import chainer
+import numpy as np
 from chainer import training
 from chainer.training import extensions
+from chainercv import transforms
+from chainercv import utils
+import cv2 as cv
 
 import resnet50
+
+
+os.environ["CHAINER_TYPE_CHECK"] = "0"
 
 
 class PreprocessedDataset(chainer.dataset.DatasetMixin):
 
     def __init__(self, path, root, mean, crop_size, random=True):
         self.base = chainer.datasets.LabeledImageDataset(path, root)
-        self.mean = mean.astype('f')
+        self.mean = mean.astype('f').mean(axis=(1, 2))[:, None, None]
         self.crop_size = crop_size
         self.random = random
 
@@ -40,13 +47,21 @@ class PreprocessedDataset(chainer.dataset.DatasetMixin):
         #     - Scaling to [0, 1] value
         crop_size = self.crop_size
 
-        image, label = self.base[i]
+        path, int_label = self.base._pairs[i]
+        full_path = os.path.join(self.base._root, path)
+
+        image = cv.imread(full_path, cv.IMREAD_COLOR)
+        image = image.astype(np.float32)[:, :, ::-1].transpose(2, 0, 1)
+        label = np.array(int_label, dtype=np.int32)
+
         _, h, w = image.shape
+        if h < crop_size or w < crop_size:
+            image = transforms.scale(image, crop_size)
 
         if self.random:
             # Randomly crop a region and flip the image
-            top = random.randint(0, h - crop_size - 1)
-            left = random.randint(0, w - crop_size - 1)
+            top = random.randint(0, h - crop_size - 1) if h > crop_size else 0
+            left = random.randint(0, w - crop_size - 1) if w > crop_size else 0
             if random.randint(0, 1):
                 image = image[:, :, ::-1]
         else:
@@ -57,8 +72,8 @@ class PreprocessedDataset(chainer.dataset.DatasetMixin):
         right = left + crop_size
 
         image = image[:, top:bottom, left:right]
-        image -= self.mean[:, top:bottom, left:right]
-        image *= (1.0 / 255.0)  # Scale to [0, 1]
+        image -= self.mean
+        image *= 0.0078125  # -128 ~ 128
         return image, label
 
 
@@ -101,6 +116,11 @@ def main():
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
+    chainer.cuda.set_max_workspace_size(1024 * 1024 * 1024)
+    chainer.config.use_cudnn_tensor_core = 'auto'
+    chainer.config.autotune = True
+    chainer.config.cudnn_fast_batch_normalization = True
+
     # Initialize the model to train
     model = archs[args.arch]()
     if args.initmodel:
@@ -125,7 +145,8 @@ def main():
         val, args.val_batchsize, repeat=False, n_processes=args.loaderjob)
 
     # Set up an optimizer
-    optimizer = chainer.optimizers.MomentumSGD(lr=0.1, momentum=0.9)
+    lr = 0.1 * args.batchsize / 256
+    optimizer = chainer.optimizers.MomentumSGD(lr=lr, momentum=0.9)
     optimizer.setup(model)
     optimizer.add_hook(chainer.optimizer.WeightDecay(0.0001))
 
@@ -136,8 +157,10 @@ def main():
     val_interval = (10 if args.test else 5000), 'iteration'
     log_interval = (10 if args.test else 100), 'iteration'
 
-    trainer.extend(extensions.polynomial_shift.PolynomialShift('lr', 1, 900000),
-                   trigger=(1, 'iteration'))
+    trainer.extend(
+        trigger=(30, 'epoch'),
+        extension=extensions.ExponentialShift('lr', 0.1, optimizer=optimizer))
+
     trainer.extend(extensions.Evaluator(val_iter, model, device=args.gpu),
                    trigger=val_interval)
     trainer.extend(extensions.dump_graph('main/loss'))
