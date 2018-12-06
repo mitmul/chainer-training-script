@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+
 """Example code of learning a large scale convnet from ILSVRC2012 dataset.
 
 Prerequisite: To run this example, crop the center of ILSVRC2012 training and
@@ -52,7 +52,6 @@ class PreprocessedDataset(chainer.dataset.DatasetMixin):
 
         assert os.path.exists(full_path)
         image = cv.imread(full_path, cv.IMREAD_COLOR)
-        assert image.shape[2] == 3, full_path
         image = image.astype(np.float32)[:, :, ::-1].transpose(2, 0, 1)
         label = np.array(int_label, dtype=np.int32)
 
@@ -76,7 +75,9 @@ class PreprocessedDataset(chainer.dataset.DatasetMixin):
         image = image[:, top:bottom, left:right]
         image -= self.mean
         image *= 0.0078125  # -128 ~ 128
-        assert image.shape == (3, self.crop_size, self.crop_size), full_path
+
+        assert image.shape == (3, crop_size, crop_size), '{}: {}'.format(full_path, image.shape)
+
         return image, label
 
 
@@ -124,66 +125,21 @@ def main():
     chainer.config.autotune = True
     chainer.config.cudnn_fast_batch_normalization = True
 
-    # Initialize the model to train
-    model = archs[args.arch]()
-    if args.initmodel:
-        print('Load model from', args.initmodel)
-        chainer.serializers.load_npz(args.initmodel, model)
-    if args.gpu >= 0:
-        chainer.cuda.get_device(args.gpu).use()  # Make the GPU current
-        model.to_gpu()
-    else:
-        model.to_intel64()
     # Load the datasets and mean file
     mean = np.load(args.mean)
     train = PreprocessedDataset(
-        args.train, args.train_root, mean, model.insize)
+        args.train, args.train_root, mean, 224)
     val = PreprocessedDataset(
-        args.val, args.val_root, mean, model.insize, False)
-    # These iterators load the images with subprocesses running in parallel to
-    # the training/validation.
-    train_iter = chainer.iterators.MultiprocessIterator(
-        train, args.batchsize, n_processes=args.loaderjob)
-    val_iter = chainer.iterators.MultiprocessIterator(
-        val, args.val_batchsize, repeat=False, n_processes=args.loaderjob)
+        args.val, args.val_root, mean, 224, False)
 
-    # Set up an optimizer
-    lr = 0.1 * args.batchsize / 256
-    optimizer = chainer.optimizers.MomentumSGD(lr=lr, momentum=0.9)
-    optimizer.setup(model)
-    optimizer.add_hook(chainer.optimizer.WeightDecay(0.0001))
-
-    # Set up a trainer
-    updater = training.StandardUpdater(train_iter, optimizer, device=args.gpu)
-    trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
-
-    val_interval = (10 if args.test else 5000), 'iteration'
-    log_interval = (10 if args.test else 100), 'iteration'
-
-    trainer.extend(
-        trigger=(30, 'epoch'),
-        extension=extensions.ExponentialShift('lr', 0.1, optimizer=optimizer))
-
-    trainer.extend(extensions.Evaluator(val_iter, model, device=args.gpu),
-                   trigger=val_interval)
-    trainer.extend(extensions.dump_graph('main/loss'))
-    trainer.extend(extensions.snapshot(), trigger=val_interval)
-    trainer.extend(extensions.snapshot_object(
-        model, 'model_iter_{.updater.iteration}'), trigger=val_interval)
-    # Be careful to pass the interval directly to LogReport
-    # (it determines when to emit log rather than when to read observations)
-    trainer.extend(extensions.LogReport(trigger=log_interval))
-    trainer.extend(extensions.observe_lr(), trigger=log_interval)
-    trainer.extend(extensions.PrintReport([
-        'epoch', 'iteration', 'main/loss', 'validation/main/loss',
-        'main/accuracy', 'validation/main/accuracy', 'lr', 'elapsed_time'
-    ]), trigger=log_interval)
-    trainer.extend(extensions.ProgressBar(update_interval=1))
-
-    if args.resume:
-        chainer.serializers.load_npz(args.resume, trainer)
-
-    trainer.run()
+    # for i in range(len(train)):
+    #     print('{} / {}'.format(i, len(train)))
+    #     assert os.path.exists(os.path.join(train.base._root, train.base._pairs[i][0]))
+ 
+    for j in range(len(val)):
+        print('{} / {}'.format(j, len(val)))
+        val[j]
+        assert os.path.exists(os.path.join(val.base._root, val.base._pairs[j][0]))
 
 
 if __name__ == '__main__':
